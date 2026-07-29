@@ -661,6 +661,7 @@ int exec(context *ctx, object *prg) {
             break;
         }
         default:
+            fprintf(stderr, "Error: cannot execute object of type %d\n", o->type);
             return -1;
         }
     }
@@ -677,10 +678,10 @@ void printObject(object *o){
         printf("%d ", o->i);
         break;
     case TYPE_FLOAT:
-        printf("%.3f", o->f);
+        printf("%.3f ", o->f);
         break;
     case TYPE_STR:
-        printf("\"%s\"", o->str.buf);
+        printf("\"%s\" ", o->str.buf);
         break;
     case TYPE_SYMBOL:
         printf("%s", o->str.buf);
@@ -719,6 +720,11 @@ int inlineProgram(context *ctx){
             buf[len++] = (char)c;
         }
 
+        if (len == MAX_LEN - 1 && c != '\n' && c != EOF) {
+            while ((c = getchar()) != '\n' && c != EOF) {}
+            fprintf(stderr, "Warning: input line truncated to %d chars\n", MAX_LEN - 1);
+        }
+
         if (c == EOF && len == 0){
             printf("\n");
             break;
@@ -752,6 +758,7 @@ int main(int argc, char **argv) {
         context *ctx = createContext();
         initForth(ctx);
         int rc = inlineProgram(ctx);
+        freeContext(ctx);
         return rc == 0 ? 0 : 1;
     }
 
