@@ -701,12 +701,58 @@ void printObject(object *o){
 
 }
 
+/* -------------------------------------- REPL --------------------------------------*/
+
+#define MAX_LEN 1024
+int inlineProgram(context *ctx){
+    int c;
+    size_t len;
+    object *prg;
+    char *buf = xmalloc(sizeof(char) * MAX_LEN);
+
+    while (1){
+        len = 0;
+        printf(">> ");
+        fflush(stdout);
+
+        while ((c = getchar()) != '\n' && c != EOF && len < MAX_LEN - 1){
+            buf[len++] = (char)c;
+        }
+
+        if (c == EOF && len == 0){
+            printf("\n");
+            break;
+        }
+
+        buf[len] = '\0';
+
+        if (strcmp(buf, "exit") == 0 || strcmp(buf, "quit") == 0){
+            break;
+        }
+
+        prg = compile(buf);
+        if (prg != NULL){
+            exec(ctx, prg);       
+            release(prg);            
+        }
+
+        if (c == EOF){
+            break;
+        }
+    }
+
+    free(buf);
+    return 0;
+}
+
 /* -------------------------------------- MAIN --------------------------------------*/
 
 int main(int argc, char **argv) {
     if (argc != 2) {
-        fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
-        return 1;
+        context *ctx = createContext();
+        initForth(ctx);
+        int rc = inlineProgram(ctx);
+        return rc == 0 ? 0 : 1;
     }
 
     /*Reading program memory , for later parsing*/

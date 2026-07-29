@@ -1,1 +1,1 @@
-: test 10 2 + ; test dup *
+: test 10 2 + ; test dup * 2 swap
