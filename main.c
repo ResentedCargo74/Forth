@@ -764,7 +764,6 @@ int exec(context *ctx, object *prg) {
                 int found_while = 0;
                 int found_repeat = 0;
 
-                /* Trova WHILE e costruisce la condizione */
                 for (; j < prg->list.len; j++) {
 
                     object *cur = prg->list.ele[j];
@@ -785,7 +784,6 @@ int exec(context *ctx, object *prg) {
                     return -1;
                 }
 
-                /* Trova REPEAT e costruisce il body */
                 j++;
 
                 for (; j < prg->list.len; j++) {
@@ -810,7 +808,6 @@ int exec(context *ctx, object *prg) {
                     return -1;
                 }
 
-                /* Esegui il ciclo */
                 while (1) {
 
                     if (exec(ctx, condition) != 0) {
