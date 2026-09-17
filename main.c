@@ -643,6 +643,220 @@ int exec(context *ctx, object *prg) {
                 i = j;
                 break;
             }
+            /* ------------------- IF ... ELSE ... THEN ------------------- */
+            else if (strcmp(o->str.buf, "if") == 0) {
+
+                /* Get condition from stack */
+                object *cond = stackPop(ctx, TYPE_ALL);
+
+                if (!cond) {
+                    fprintf(stderr, "Error: stack underflow for 'if'\n");
+                    return -1;
+                }
+
+                /* Condition must be an integer or boolean */
+                if (cond->type != TYPE_INT && cond->type != TYPE_BOOL) {
+                    fprintf(stderr, "Error: 'if' requires an integer or boolean condition\n");
+                    release(cond);
+                    return -1;
+                }
+
+                int is_true = cond->i != 0;
+                release(cond);
+
+                /*
+                * Build the two branches without executing them.
+                *
+                * Example:
+                *
+                *   true if 5 else 10 then
+                *
+                * then_branch = [5]
+                * else_branch = [10]
+                */
+                object *then_branch = createListObject();
+                object *else_branch = createListObject();
+
+                object *current_target = then_branch;
+
+                int depth = 1;
+                size_t j = i + 1;
+                int found_end = 0;
+
+                for (; j < prg->list.len; j++) {
+
+                    object *cur = prg->list.ele[j];
+
+                    if (cur->type == TYPE_SYMBOL) {
+
+                        /* Nested IF */
+                        if (strcmp(cur->str.buf, "if") == 0) {
+                            depth++;
+                        }
+
+                        /* End of current IF */
+                        else if (strcmp(cur->str.buf, "then") == 0) {
+
+                            depth--;
+
+                            if (depth == 0) {
+                                found_end = 1;
+                                break;
+                            }
+                        }
+
+                        /*
+                        * ELSE belongs only to the current IF.
+                        * Nested IFs are ignored here because depth != 1.
+                        */
+                        else if (strcmp(cur->str.buf, "else") == 0 && depth == 1) {
+                            current_target = else_branch;
+                            continue;
+                        }
+                    }
+
+                    retain(cur);
+                    listPush(current_target, cur);
+                }
+
+                if (!found_end) {
+                    fprintf(stderr, "Error: missing 'then' to close 'if'\n");
+
+                    release(then_branch);
+                    release(else_branch);
+
+                    return -1;
+                }
+
+                /*
+                * Execute ONLY the selected branch.
+                */
+                int res;
+
+                if (is_true) {
+                    res = exec(ctx, then_branch);
+                } else {
+                    res = exec(ctx, else_branch);
+                }
+
+                release(then_branch);
+                release(else_branch);
+
+                if (res != 0)
+                    return -1;
+
+                /*
+                * Skip everything up to and including 'then'
+                * in the outer execution loop.
+                */
+                i = j;
+                break;
+            }
+
+            /* ------------------- WHILE ------------------- */
+
+            else if (strcmp(o->str.buf, "begin") == 0) {
+
+                object *condition = createListObject();
+                object *body = createListObject();
+
+                size_t j = i + 1;
+                int found_while = 0;
+                int found_repeat = 0;
+
+                /* Trova WHILE e costruisce la condizione */
+                for (; j < prg->list.len; j++) {
+
+                    object *cur = prg->list.ele[j];
+
+                    if (cur->type == TYPE_SYMBOL && strcmp(cur->str.buf, "while") == 0) {
+                        found_while = 1;
+                        break;
+                    }
+
+                    retain(cur);
+                    listPush(condition, cur);
+                }
+
+                if (!found_while) {
+                    fprintf(stderr, "Error: missing 'WHILE' after 'BEGIN'\n");
+                    release(condition);
+                    release(body);
+                    return -1;
+                }
+
+                /* Trova REPEAT e costruisce il body */
+                j++;
+
+                for (; j < prg->list.len; j++) {
+
+                    object *cur = prg->list.ele[j];
+
+                    if (cur->type == TYPE_SYMBOL &&
+                        strcmp(cur->str.buf, "repeat") == 0) {
+
+                        found_repeat = 1;
+                        break;
+                    }
+
+                    retain(cur);
+                    listPush(body, cur);
+                }
+
+                if (!found_repeat) {
+                    fprintf(stderr, "Error: missing 'REPEAT' after 'BEGIN'\n");
+                    release(condition);
+                    release(body);
+                    return -1;
+                }
+
+                /* Esegui il ciclo */
+                while (1) {
+
+                    if (exec(ctx, condition) != 0) {
+                        release(condition);
+                        release(body);
+                        return -1;
+                    }
+
+                    object *cond = stackPop(ctx, TYPE_ALL);
+
+                    if (!cond) {
+                        fprintf(stderr, "Error: stack underflow for 'WHILE'\n");
+                        release(condition);
+                        release(body);
+                        return -1;
+                    }
+
+                    if (cond->type != TYPE_BOOL && cond->type != TYPE_INT) {
+
+                        fprintf(stderr, "Error: 'WHILE' requires an integer or boolean condition\n");
+
+                        release(cond);
+                        release(condition);
+                        release(body);
+                        return -1;
+                    }
+
+                    int is_true = cond->i != 0;
+                    release(cond);
+
+                    if (!is_true)
+                        break;
+
+                    if (exec(ctx, body) != 0) {
+                        release(condition);
+                        release(body);
+                        return -1;
+                    }
+                }
+
+                release(condition);
+                release(body);
+
+                i = j;
+                break;
+            }
 
             word *w = lookup(ctx,o->str.buf);
             if(!w){
