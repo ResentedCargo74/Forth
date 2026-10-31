@@ -1,19 +1,76 @@
-# Toy Forth Interpreter in C
+# Forth
 
-A minimalist **Forth**-style interpreter written in C, designed with a dynamic typing system, manual memory management via *reference counting*, and support for defining new words.
+A small, embeddable Forth-style interpreter in C11. The project favours plain data
+structures, visible ownership rules, and a short execution path over a framework.
 
-## Main Features
+## Build and test
 
-* **Dynamic Typing:** Supports integers (`int`), floats (`float`), booleans (`bool`), strings (`str`), symbols (`symbol`), and lists (`list`).
-* **Memory Management:** Integrated reference counting system (`retain`/`release`) to prevent memory leaks and correctly manage lists and complex objects.
-* **Extensible Dictionary:** Supports word redefinition (*shadowing*) and runtime creation of new words using the `:` ... `;` syntax.
-* **Clean Architecture:** Clear separation between the parsing/compilation phase (AST creation) and the execution phase.
+```sh
+make
+make test
+./forth program.tf
+```
 
-## Requirements
+On Windows with MinGW, use `mingw32-make`, or compile directly:
 
-To compile and run the code, you need a standard C compiler (e.g., `gcc` or `clang`) and a compatible operating system (Linux, macOS, or Windows with WSL/MinGW).
+```sh
+gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Iinclude -o forth.exe src/main.c src/value.c src/dictionary.c src/parser.c src/vm.c src/repl.c
+```
 
-## Compilation
+Run without an argument for the REPL. Type `quit` or `exit` to leave it.
 
-```bash
-gcc main.c -o main -O2 -W -Wall
+## Language overview
+
+Values are integers, floating-point values, booleans, strings, symbols, and the
+internal lists used for programs. `true` and `false` are real boolean literals.
+Numbers accept scientific notation; strings accept `\n`, `\r`, `\t`, `\\`, and `\"`.
+
+```forth
+\ A line comment
+( A parenthesized comment )
+
+: square dup * ;
+: factorial dup 1 > if dup 1 - factorial * else drop 1 then ;
+
+5 factorial . cr
+3 begin dup 0 > while dup . 1 - repeat drop
+```
+
+Core words include:
+
+| Group | Words |
+| --- | --- |
+| Arithmetic | `+ - * / mod /mod negate abs 1+ 1- 2* 2/ min max` |
+| Comparisons | `= <> < > <= >= 0= 0<> 0< 0>` |
+| Bit and flags | `and or xor invert lshift rshift not` |
+| Data stack | `dup ?dup drop swap over rot -rot nip tuck pick roll` |
+| Double-cell stack | `2dup 2drop 2swap 2over` |
+| Return stack | `>r r> r@` |
+| Memory | `variable constant value to @ ! +! ?` |
+| Output and discovery | `. .s ." s" cr emit words` |
+| Flow control | `if ... else ... then`, `begin ... while ... repeat`, `do/?do ... loop/+loop`, `i j leave` |
+| Definitions | `: name ... ;` |
+
+The operands remain on the stack after a type or arithmetic error. This makes an
+interactive session inspectable instead of silently discarding the evidence.
+
+## Project map
+
+- `include/forth.h` is the compact public API and ownership contract.
+- `src/value.c` owns dynamic values, reference counting, lists, and printing.
+- `src/dictionary.c` owns contexts, stacks, and the append-only word dictionary.
+- `src/parser.c` turns source into a program list.
+- `src/vm.c` provides the core words and evaluator.
+- `src/repl.c` provides unbounded interactive input; `src/main.c` is only the CLI shell.
+- `tests/test_forth.c` is a small API-level regression suite.
+
+Read [ARCHITECTURE.md](ARCHITECTURE.md) before extending the interpreter: it records
+the current invariants, decisions, and changes made to the project.
+
+The behaviour of the standard-style words above follows the
+[Gforth 1.0 manual](https://gforth.org/manual/1.0/), notably its documentation of
+[integer division](https://gforth.org/manual/1.0/Integer-division.html),
+[counted loops](https://gforth.org/manual/1.0/Counted-Loops.html), and
+[defining words](https://gforth.org/manual/1.0/Constants.html). This is a compact
+core interpreter, not a full Gforth distribution: files, block I/O, compiler macros,
+and Gforth-specific object systems remain intentionally out of scope.

@@ -1,1 +1,4 @@
-: test 10 2 + ; test dup * 2 swap > if 5 then 5 begin dup 0 > while dup . 1 - repeat drop
+: test 10 2 + ; 
+test dup * 2 swap > 
+if 5 then 5 
+begin dup 0 > while dup . 1 - repeat drop
