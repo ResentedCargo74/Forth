@@ -52,6 +52,44 @@ static int pop_pair(Context *ctx, const char *word, Value **left, Value **right)
     return 0;
 }
 
+/*
+ * Recover from a bad operand: report the error, push the operands back so the
+ * REPL stays inspectable, and return -1. The caller must have already popped
+ * `left` and `right` (in that order) and not yet released them.
+ */
+static int recover_pair(Context *ctx, const char *word, const char *message,
+                        Value *left, Value *right) {
+    stack_error(word, message);
+    forth_stack_push(ctx, left);
+    forth_stack_push(ctx, right);
+    return -1;
+}
+
+/* Same contract, for a single popped operand. */
+static int recover_value(Context *ctx, const char *word, const char *message, Value *value) {
+    stack_error(word, message);
+    forth_stack_push(ctx, value);
+    return -1;
+}
+
+/*
+ * Return 1 when `a * b` would overflow a `long`, 0 otherwise. Both operands
+ * are non-zero here: zero times anything is representable and the division
+ * below is only reached when the corresponding factor is non-zero.
+ */
+static int mul_overflows(long a, long b) {
+    if (a == -1 && b == LONG_MIN) return 1;
+    if (b == -1 && a == LONG_MIN) return 1;
+    if (a > 0) {
+        if (b > 0)
+            return a > LONG_MAX / b;
+        return b < LONG_MIN / a;
+    }
+    if (b > 0)
+        return a < LONG_MIN / b;
+    return a < LONG_MAX / b;
+}
+
 static int builtin_math(Context *ctx, const char *word) {
     Value *left;
     Value *right;
@@ -60,63 +98,38 @@ static int builtin_math(Context *ctx, const char *word) {
 
     if (pop_pair(ctx, word, &left, &right) != 0)
         return -1;
-    if (!is_number(left) || !is_number(right)) {
-        stack_error(word, "expects two numbers");
-        forth_stack_push(ctx, left);
-        forth_stack_push(ctx, right);
-        return -1;
-    }
+    if (!is_number(left) || !is_number(right))
+        return recover_pair(ctx, word, "expects two numbers", left, right);
 
     if (strcmp(word, "%") == 0 || strcmp(word, "mod") == 0) {
-        if (left->type != VALUE_INT || right->type != VALUE_INT) {
-            stack_error(word, "expects two integers");
-            forth_stack_push(ctx, left);
-            forth_stack_push(ctx, right);
-            return -1;
-        }
-        if (right->as.integer == 0) {
-            stack_error(word, "division by zero");
-            forth_stack_push(ctx, left);
-            forth_stack_push(ctx, right);
-            return -1;
-        }
+        if (left->type != VALUE_INT || right->type != VALUE_INT)
+            return recover_pair(ctx, word, "expects two integers", left, right);
+        if (right->as.integer == 0)
+            return recover_pair(ctx, word, "division by zero", left, right);
         if (left->as.integer == LONG_MIN && right->as.integer == -1) {
             /* C leaves this quotient unrepresentable, even though the remainder is zero. */
-            stack_error(word, "integer overflow");
-            forth_stack_push(ctx, left);
-            forth_stack_push(ctx, right);
-            return -1;
+            return recover_pair(ctx, word, "integer overflow", left, right);
         }
         result = value_new_int(left->as.integer % right->as.integer);
     } else if (left->type == VALUE_INT && right->type == VALUE_INT) {
         long a_int = left->as.integer;
         long b_int = right->as.integer;
         if (strcmp(word, "/") == 0) {
-            if (b_int == 0) {
-                stack_error(word, "division by zero");
-                forth_stack_push(ctx, left);
-                forth_stack_push(ctx, right);
-                return -1;
-            }
-            if (a_int == LONG_MIN && b_int == -1) {
-                stack_error(word, "integer overflow");
-                forth_stack_push(ctx, left);
-                forth_stack_push(ctx, right);
-                return -1;
-            }
+            if (b_int == 0)
+                return recover_pair(ctx, word, "division by zero", left, right);
+            if (a_int == LONG_MIN && b_int == -1)
+                return recover_pair(ctx, word, "integer overflow", left, right);
             result = value_new_int(a_int / b_int);
-        } else if ((strcmp(word, "+") == 0 && ((b_int > 0 && a_int > LONG_MAX - b_int) ||
-                                         (b_int < 0 && a_int < LONG_MIN - b_int))) ||
-            (strcmp(word, "-") == 0 && ((b_int < 0 && a_int > LONG_MAX + b_int) ||
-                                         (b_int > 0 && a_int < LONG_MIN + b_int))) ||
-            (strcmp(word, "*") == 0 && a_int != 0 &&
-             ((a_int == -1 && b_int == LONG_MIN) || (b_int == -1 && a_int == LONG_MIN) ||
-              (a_int > 0 ? (b_int > 0 ? a_int > LONG_MAX / b_int : b_int < LONG_MIN / a_int)
-                         : (b_int > 0 ? a_int < LONG_MIN / b_int : a_int < LONG_MAX / b_int))))) {
-            stack_error(word, "integer overflow");
-            forth_stack_push(ctx, left);
-            forth_stack_push(ctx, right);
-            return -1;
+        } else if (strcmp(word, "+") == 0 &&
+                   ((b_int > 0 && a_int > LONG_MAX - b_int) ||
+                    (b_int < 0 && a_int < LONG_MIN - b_int))) {
+            return recover_pair(ctx, word, "integer overflow", left, right);
+        } else if (strcmp(word, "-") == 0 &&
+                   ((b_int < 0 && a_int > LONG_MAX + b_int) ||
+                    (b_int > 0 && a_int < LONG_MIN + b_int))) {
+            return recover_pair(ctx, word, "integer overflow", left, right);
+        } else if (strcmp(word, "*") == 0 && a_int != 0 && mul_overflows(a_int, b_int)) {
+            return recover_pair(ctx, word, "integer overflow", left, right);
         } else {
             if (strcmp(word, "+") == 0) result = value_new_int(a_int + b_int);
             else if (strcmp(word, "-") == 0) result = value_new_int(a_int - b_int);
@@ -125,12 +138,8 @@ static int builtin_math(Context *ctx, const char *word) {
     } else {
         a = as_double(left);
         b = as_double(right);
-        if (strcmp(word, "/") == 0 && b == 0.0) {
-            stack_error(word, "division by zero");
-            forth_stack_push(ctx, left);
-            forth_stack_push(ctx, right);
-            return -1;
-        }
+        if (strcmp(word, "/") == 0 && b == 0.0)
+            return recover_pair(ctx, word, "division by zero", left, right);
         if (strcmp(word, "+") == 0) result = value_new_float(a + b);
         else if (strcmp(word, "-") == 0) result = value_new_float(a - b);
         else if (strcmp(word, "*") == 0) result = value_new_float(a * b);
@@ -147,33 +156,21 @@ static int builtin_unary_math(Context *ctx, const char *word) {
     long number;
     long result;
 
-    if (value == NULL) { stack_error(word, "stack underflow"); return -1; }
-    if (value->type != VALUE_INT) {
-        stack_error(word, "expects an integer");
-        forth_stack_push(ctx, value);
+    if (value == NULL) {
+        stack_error(word, "stack underflow");
         return -1;
     }
+    if (value->type != VALUE_INT)
+        return recover_value(ctx, word, "expects an integer", value);
     number = value->as.integer;
-    if ((strcmp(word, "negate") == 0 || strcmp(word, "abs") == 0) && number == LONG_MIN) {
-        stack_error(word, "integer overflow");
-        forth_stack_push(ctx, value);
-        return -1;
-    }
-    if (strcmp(word, "1+") == 0 && number == LONG_MAX) {
-        stack_error(word, "integer overflow");
-        forth_stack_push(ctx, value);
-        return -1;
-    }
-    if (strcmp(word, "1-") == 0 && number == LONG_MIN) {
-        stack_error(word, "integer overflow");
-        forth_stack_push(ctx, value);
-        return -1;
-    }
-    if (strcmp(word, "2*") == 0 && (number > LONG_MAX / 2 || number < LONG_MIN / 2)) {
-        stack_error(word, "integer overflow");
-        forth_stack_push(ctx, value);
-        return -1;
-    }
+    if ((strcmp(word, "negate") == 0 || strcmp(word, "abs") == 0) && number == LONG_MIN)
+        return recover_value(ctx, word, "integer overflow", value);
+    if (strcmp(word, "1+") == 0 && number == LONG_MAX)
+        return recover_value(ctx, word, "integer overflow", value);
+    if (strcmp(word, "1-") == 0 && number == LONG_MIN)
+        return recover_value(ctx, word, "integer overflow", value);
+    if (strcmp(word, "2*") == 0 && (number > LONG_MAX / 2 || number < LONG_MIN / 2))
+        return recover_value(ctx, word, "integer overflow", value);
     if (strcmp(word, "negate") == 0) result = -number;
     else if (strcmp(word, "abs") == 0) result = number < 0 ? -number : number;
     else if (strcmp(word, "1+") == 0) result = number + 1;
@@ -190,12 +187,8 @@ static int builtin_min_max(Context *ctx, const char *word) {
     Value *right;
     Value *result;
     if (pop_pair(ctx, word, &left, &right) != 0) return -1;
-    if (!is_number(left) || !is_number(right)) {
-        stack_error(word, "expects two numbers");
-        forth_stack_push(ctx, left);
-        forth_stack_push(ctx, right);
-        return -1;
-    }
+    if (!is_number(left) || !is_number(right))
+        return recover_pair(ctx, word, "expects two numbers", left, right);
     if (left->type == VALUE_INT && right->type == VALUE_INT) {
         long selected = strcmp(word, "min") == 0 ?
                         (left->as.integer < right->as.integer ? left->as.integer : right->as.integer) :
@@ -270,7 +263,8 @@ static int builtin_dots(Context *ctx, const char *word) {
 static int builtin_dup(Context *ctx, const char *word) {
     Value *value = forth_stack_peek(ctx);
     (void)word;
-    if (value == NULL) { stack_error("dup", "stack underflow"); return -1; }
+    if (value == NULL)
+        return recover_value(ctx, "dup", "stack underflow", value);
     value_retain(value);
     forth_stack_push(ctx, value);
     return 0;
@@ -279,7 +273,8 @@ static int builtin_dup(Context *ctx, const char *word) {
 static int builtin_drop(Context *ctx, const char *word) {
     Value *value = forth_stack_pop(ctx);
     (void)word;
-    if (value == NULL) { stack_error("drop", "stack underflow"); return -1; }
+    if (value == NULL)
+        return recover_value(ctx, "drop", "stack underflow", value);
     value_release(value);
     return 0;
 }
@@ -297,7 +292,8 @@ static int builtin_over(Context *ctx, const char *word) {
     size_t depth = forth_stack_depth(ctx);
     Value *value;
     (void)word;
-    if (depth < 2) { stack_error("over", "stack underflow"); return -1; }
+    if (depth < 2)
+        return recover_value(ctx, "over", "stack underflow", NULL);
     value = ctx->stack->as.list.items[depth - 2];
     value_retain(value);
     forth_stack_push(ctx, value);
@@ -309,7 +305,8 @@ static int builtin_rot(Context *ctx, const char *word) {
     Value *b;
     Value *c;
     (void)word;
-    if (forth_stack_depth(ctx) < 3) { stack_error("rot", "stack underflow"); return -1; }
+    if (forth_stack_depth(ctx) < 3)
+        return recover_value(ctx, "rot", "stack underflow", NULL);
     c = forth_stack_pop(ctx);
     b = forth_stack_pop(ctx);
     a = forth_stack_pop(ctx);
@@ -323,11 +320,10 @@ static int builtin_qdup(Context *ctx, const char *word) {
     Value *value = forth_stack_peek(ctx);
     int truth;
     (void)word;
-    if (value == NULL) { stack_error("?dup", "stack underflow"); return -1; }
-    if (as_truth(value, &truth) != 0) {
-        stack_error("?dup", "expects a boolean or integer");
-        return -1;
-    }
+    if (value == NULL)
+        return recover_value(ctx, "?dup", "stack underflow", value);
+    if (as_truth(value, &truth) != 0)
+        return recover_value(ctx, "?dup", "expects a boolean or integer", value);
     if (truth) {
         value_retain(value);
         forth_stack_push(ctx, value);
@@ -816,6 +812,7 @@ static int execute_counted_loop(Context *ctx, Value *program, size_t *index, siz
     Value *start;
     size_t end;
     long boundary;
+    long start_value;
 
     if (find_counted_loop_end(program, *index + 1, last, &end) != 0) {
         stack_error(conditional ? "?do" : "do", "missing loop terminator");
@@ -829,14 +826,16 @@ static int execute_counted_loop(Context *ctx, Value *program, size_t *index, siz
         return -1;
     }
     boundary = limit->as.integer;
+    /* Save before releasing: `?do` skips the loop when start == limit. */
+    start_value = start->as.integer;
     value_release(limit);
     value_release(start);
-    if (conditional && start->as.integer == boundary) {
+    if (conditional && start_value == boundary) {
         *index = end;
         return 0;
     }
 
-    loop_push(ctx, start->as.integer);
+    loop_push(ctx, start_value);
     /* `+loop` is static for the whole loop: hoist the check out of the body. */
     int has_plus_loop = is_symbol(program->as.list.items[end], "+loop");
     for (;;) {
