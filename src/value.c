@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Allocate `size` bytes, aborting on failure. The VM cannot tolerate
+ * a NULL return mid-execution, so out-of-memory is a fatal error.
+ */
 void *forth_alloc(size_t size) {
     void *pointer = malloc(size == 0 ? 1 : size);
     if (pointer == NULL) {
@@ -14,6 +18,10 @@ void *forth_alloc(size_t size) {
     return pointer;
 }
 
+/*
+ * Reallocate `pointer` to `size` bytes, aborting on failure. Same fatal
+ * contract as `forth_alloc`: a NULL return would corrupt the VM.
+ */
 void *forth_realloc(void *pointer, size_t size) {
     void *replacement = realloc(pointer, size == 0 ? 1 : size);
     if (replacement == NULL) {
@@ -55,6 +63,10 @@ Value *value_new_bool(int truth) {
     return value;
 }
 
+/*
+ * Create a string/symbol value owning a NUL-terminated copy of `text`.
+ * `length` bytes are copied; the caller retains the original.
+ */
 static Value *value_new_text(ValueType type, const char *text, size_t length) {
     Value *value = value_new(type);
     value->as.string.data = forth_alloc(length + 1);

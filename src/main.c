@@ -30,6 +30,11 @@ static char *read_file(const char *path) {
     return buffer;
 }
 
+/*
+ * Entry point: if a `program.tf` path is given, compile+execute it and
+ * print the final stack. Otherwise, drop into the REPL (`forth> `).
+ * Usage: forth [program.tf].
+ */
 int main(int argc, char **argv) {
     Context *ctx;
     int result = 0;

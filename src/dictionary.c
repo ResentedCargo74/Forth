@@ -3,6 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Allocate and zero-initialize a fresh execution context: data stack,
+ * return stack, dictionary, and loop-index stack. The caller owns the
+ * returned pointer and must release it with `forth_context_free`.
+ */
 Context *forth_context_new(void) {
     Context *ctx = forth_alloc(sizeof(*ctx));
     ctx->stack = value_new_list();
@@ -17,6 +22,10 @@ Context *forth_context_new(void) {
     return ctx;
 }
 
+/*
+ * Deep-free a context: release the stacks, dictionary words, and loop
+ * indices. This cleans up all owned references and memory.
+ */
 void forth_context_free(Context *ctx) {
     size_t index;
 

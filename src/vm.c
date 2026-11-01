@@ -804,11 +804,17 @@ static int advance_loop(long index, long step, long *next) {
     return 0;
 }
 
+/*
+ * Execute a counted loop (`do ... loop` / `?do ... loop` / `+loop`).
+ * `conditional` is true for `?do`, which skips the loop entirely when
+ * `start == limit`; `do` runs at least one iteration. The loop body is
+ * the program range `[index+1, end)`. On `leave`, the loop exits and
+ * execution resumes after the `loop`/`+loop` token.
+ */
 static int execute_counted_loop(Context *ctx, Value *program, size_t *index, size_t last, int conditional) {
     Value *limit;
     Value *start;
     size_t end;
-    long counter;
     long boundary;
 
     if (find_counted_loop_end(program, *index + 1, last, &end) != 0) {
@@ -823,15 +829,16 @@ static int execute_counted_loop(Context *ctx, Value *program, size_t *index, siz
         return -1;
     }
     boundary = limit->as.integer;
-    counter = start->as.integer;
     value_release(limit);
     value_release(start);
-    if (conditional && counter == boundary) {
+    if (conditional && start->as.integer == boundary) {
         *index = end;
         return 0;
     }
 
-    loop_push(ctx, counter);
+    loop_push(ctx, start->as.integer);
+    /* `+loop` is static for the whole loop: hoist the check out of the body. */
+    int has_plus_loop = is_symbol(program->as.list.items[end], "+loop");
     for (;;) {
         Value *step_value;
         long step = 1;
@@ -842,7 +849,7 @@ static int execute_counted_loop(Context *ctx, Value *program, size_t *index, siz
             loop_pop(ctx);
             return result;
         }
-        if (is_symbol(program->as.list.items[end], "+loop")) {
+        if (has_plus_loop) {
             step_value = forth_stack_pop(ctx);
             if (step_value == NULL || step_value->type != VALUE_INT) {
                 if (step_value != NULL) forth_stack_push(ctx, step_value);
@@ -859,16 +866,13 @@ static int execute_counted_loop(Context *ctx, Value *program, size_t *index, siz
             }
         }
         if (advance_loop(ctx->loop_indices[ctx->loop_depth - 1], step, &next) != 0) {
-            stack_error(is_symbol(program->as.list.items[end], "+loop") ? "+loop" : "loop",
-                        "loop index overflow");
+            stack_error(has_plus_loop ? "+loop" : "loop", "loop index overflow");
             loop_pop(ctx);
             return -1;
         }
-        if (next == boundary || (step > 0 && counter < boundary && next > boundary) ||
-            (step < 0 && counter > boundary && next < boundary))
+        if ((step > 0 && next >= boundary) || (step < 0 && next <= boundary))
             break;
         ctx->loop_indices[ctx->loop_depth - 1] = next;
-        counter = next;
     }
     loop_pop(ctx);
     *index = end;

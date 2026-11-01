@@ -16,6 +16,11 @@ static void parser_error(const Parser *parser, const char *message) {
     fprintf(stderr, "forth: syntax error near `%.24s`: %s\n", parser->cursor, message);
 }
 
+/*
+ * Advance the cursor past whitespace and comments (`\` line comments
+ * and `( ... )` nested parenthetical comments). Returns 0 on success,
+ * -1 if an unterminated comment is encountered.
+ */
 static int parser_skip_layout(Parser *parser) {
     for (;;) {
         while (isspace((unsigned char)*parser->cursor))
@@ -26,20 +31,32 @@ static int parser_skip_layout(Parser *parser) {
             continue;
         }
         if (*parser->cursor == '(') {
+            int depth = 1;
             parser->cursor++;
-            while (*parser->cursor != '\0' && *parser->cursor != ')')
+            while (*parser->cursor != '\0' && depth > 0) {
+                if (*parser->cursor == '(')
+                    depth++;
+                else if (*parser->cursor == ')')
+                    depth--;
                 parser->cursor++;
-            if (*parser->cursor == '\0') {
+            }
+            if (depth > 0) {
                 parser_error(parser, "unterminated comment");
                 return -1;
             }
-            parser->cursor++;
             continue;
         }
         return 0;
     }
 }
 
+/*
+ * Check whether `text` of `length` characters is a numeric token and,
+ * if so, store the allocated Value* at `*result` (caller owns a ref).
+ * Ints have no dot/e/E; floats do. The whole token must parse; trailing
+ * garbage causes a miss. This intentionally does NOT accept hex etc. —
+ * those become symbols. Integer overflow sets errno and returns 0.
+ */
 static int token_is_number(const char *text, size_t length, Value **result) {
     char *end;
     char *copy = forth_alloc(length + 1);
@@ -58,17 +75,23 @@ static int token_is_number(const char *text, size_t length, Value **result) {
         *result = value_new_float(strtod(copy, NULL));
     } else {
         errno = 0;
-        *result = value_new_int(strtol(copy, &end, 10));
-        if (errno == ERANGE) {
-            value_release(*result);
+        long integer = strtol(copy, &end, 10);
+        if (*end != '\0' || errno == ERANGE) {
             free(copy);
             return 0;
         }
+        *result = value_new_int(integer);
     }
     free(copy);
     return 1;
 }
 
+/*
+ * Parse a `" ... "` or `s" ... "` string literal starting at the opening
+ * quote. Handles escape sequences (`\n`, `\r`, `\t`, `\\`, `\"`). The
+ * closing quote must be present; otherwise the string is unterminated.
+ * The caller owns the returned Value*; the allocated buffer is freed.
+ */
 static Value *parse_string(Parser *parser) {
     Value *text;
     char *buffer;
@@ -117,13 +140,18 @@ static Value *parse_string(Parser *parser) {
     return text;
 }
 
+/*
+ * Return the next token from the parser cursor: a number, `true`/`false`,
+ * or a lowercased symbol. The cursor stops at whitespace, `"`, `(`, `\`.
+ * The caller (forth_compile) handles the token based on its type.
+ */
 static Value *parse_token(Parser *parser) {
     const char *start = parser->cursor;
     Value *number;
     size_t length;
 
     while (*parser->cursor != '\0' && !isspace((unsigned char)*parser->cursor) &&
-           *parser->cursor != '"' && *parser->cursor != '(' && *parser->cursor != '\\')
+           *parser->cursor != '(' && *parser->cursor != '\\')
         parser->cursor++;
     length = (size_t)(parser->cursor - start);
     if (length == 0) {
@@ -139,6 +167,12 @@ static Value *parse_token(Parser *parser) {
     return value_new_symbol(start, length);
 }
 
+/*
+ * Compile `source` into a program list (owned Value* linked list) suitable
+ * for `forth_execute`. Returns NULL on syntax error; surviving stack values
+ * are left visible for inspection. Each token's ownership is transferred to
+ * the program list via `value_list_append`.
+ */
 Value *forth_compile(const char *source) {
     Parser parser;
     Value *program = value_new_list();
